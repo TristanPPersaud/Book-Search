@@ -1,70 +1,48 @@
 import express from 'express';
 import path from 'node:path';
-import { ApolloServer } from '@apollo/server';
+import type { Request, Response } from 'express';
+import db from './config/connection.js'
+import { ApolloServer } from '@apollo/server';// Note: Import from @apollo/server-express
 import { expressMiddleware } from '@apollo/server/express4';
-import jwt from 'jsonwebtoken';
-import db from './config/connection.js';  
-import typeDefs from './schemas/typeDefs.js';
-import resolvers from './schemas/resolvers.js';
-import dotenv from 'dotenv';
+import { typeDefs, resolvers } from './schemas/index.js';
+import { authenticateToken } from './services/auth.js';
+import { fileURLToPath } from 'node:url';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// Load environment variables
-dotenv.config();
-declare const __dirname: string;
-
-// Initialize Express app
-const app = express();
-const PORT = process.env.PORT || 3001;
-
-// Initialize Apollo Server
 const server = new ApolloServer({
   typeDefs,
-  resolvers,
+  resolvers
 });
 
-// Apply Apollo Server middleware to Express
 const startApolloServer = async () => {
-  // Start Apollo Server
   await server.start();
+  await db();
 
-  // Middleware for parsing JSON and URL-encoded data
-  app.use(express.urlencoded({ extended: true }));
+  const PORT = process.env.PORT || 3001;
+  const app = express();
+
+  app.use(express.urlencoded({ extended: false }));
   app.use(express.json());
 
-  // Serve static assets in production
+  app.use('/graphql', expressMiddleware(server as any,
+    {
+      context: authenticateToken as any
+    }
+  ));
+
   if (process.env.NODE_ENV === 'production') {
-    app.use(express.static(path.join(__dirname, '../client/build')));
+    app.use(express.static(path.join(__dirname, '../../client/dist')));
+
+    app.get('*', (_req: Request, res: Response) => {
+      res.sendFile(path.join(__dirname, '../../client/dist/index.html'));
+    });
   }
 
-  // Apply Apollo Server middleware with authentication context
-  app.use(
-    '/graphql',
-    expressMiddleware(server, {
-      context: async ({ req }) => {
-        const token = req.headers.authorization || '';
-        let user = null;
-  
-        if (token.startsWith('Bearer ')) {
-          try {
-            user = jwt.verify(token.split(' ')[1], process.env.JWT_SECRET_KEY!);
-          } catch (err) {
-            const error = err as Error; // Explicitly cast err to Error
-            console.error('Invalid token:', error.message);
-          }
-        }
-  
-        return { user };
-      },
-    })
-  );
-
-  // Connect to DB and start the server
-  db.once('open', () => {
-    app.listen(PORT, () =>
-      console.log(`🚀 Server running on http://localhost:${PORT}/graphql`)
-    );
+  app.listen(PORT, () => {
+    console.log(`API server running on port ${PORT}!`);
+    console.log(`Use GraphQL at http://localhost:${PORT}/graphql`);
   });
 };
 
-// Start the server
 startApolloServer();
